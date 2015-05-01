@@ -6,4 +6,4 @@ K = 100;
 NX = 10000;
 X = 4*(rand(NX, 2) - 0.5);
 
-XOut = traceCurve(Y, X, K, 1);
+XOut = traceCurve(Y, X, K, 0);

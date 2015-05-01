@@ -11,27 +11,28 @@ function [ XOut ] = traceCurve( Y, X, K, DOPLOT )
         %Get the K nearest neighbors to the last point chosen
         lastX = X(idx(ii-1), :);
         neighbs = bsxfun(@plus, sum(lastX.^2), XSumT) - 2*lastX*X';
-        [~, neighbs] = sort(neighbs);
-        neighbs = neighbs(1:1+K); %Allow to stay at the same point
+        [neighbsdist, neighbs] = sort(neighbs);
+        %Make sure to points that are far enough away are included
+        n = find(neighbsdist > DTarget(ii-1, ii), 1);
+        if isempty(n)
+            n = NX;
+        end
+        n = max(n, K+1);
+        neighbs = neighbs(1:n); %Allow to stay at the same point
         lastXs = X(idx(1:ii-1), :);
-        DTargetSub = DTarget(1:ii, 1:ii);
+        DTargetSub = DTarget(ii, 1:ii-1);
         for kk = 1:length(neighbs)
-            D2 = D(1:ii, 1:ii);
             thisX = X(neighbs(kk), :);
             DRow = bsxfun(@plus, sum(thisX.^2), sum(lastXs.^2, 2)') - 2*thisX*lastXs';
             DRow = sqrt(DRow);
-            DRow(end+1) = 0;
-            D2(1:ii, ii) = DRow;
-            D2(ii, 1:ii) = DRow;
-            %D2 = (max(DTarget(:))/max(D2(:)))*D2;
-            thisMatch = sqrt(sum( (D2(:) - DTargetSub(:)).^2 ));
+            thisMatch = sqrt(sum( (DRow(:) - DTargetSub(:)).^2 ));
             if thisMatch < bestMatch
                 bestMatch = thisMatch;
                 idx(ii) = neighbs(kk);
             end
         end
-        XSofar = X(idx(1:ii), :);
-        if DOPLOT || ii == NY
+        if DOPLOT
+            XSofar = X(idx(1:ii), :);
             clf;
             subplot(2, 2, 1);
             plot(X(:, 1), X(:, 2), 'b.');
