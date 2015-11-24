@@ -6,6 +6,7 @@ from OpenGL.GL import *
 from OpenGL.arrays import vbo
 from pylab import cm
 from Cameras3D import *
+import subprocess
 
 class LaplacianSound(object):
     def __init__(self):
@@ -27,7 +28,9 @@ class LaplacianSound(object):
     def loadAudio(self, filename):
         self.filename = filename
         self.XAudio, self.Fs = librosa.load(filename)
-        self.XAudio = librosa.core.to_mono(self.XAudio)        
+        self.XAudio = librosa.core.to_mono(self.XAudio)
+        #Convert to a format that can be played by pygame
+        subprocess.call(["avconv", "-i", filename, "temp.ogg"])
 
     def processSpecgram(self, winSize, hopSize, pfmax):
         [self.winSize, self.hopSize, self.fmax] = [winSize, hopSize, pfmax]

@@ -96,6 +96,22 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         wx.EVT_MOTION(self, self.MouseMotion)        
         #self.initGL()
 
+    def updateParams(self, evt):
+        winSize = int(self.winSizeTxt.GetValue())
+        hopSize = int(self.hopSizeTxt.GetValue())
+        fmax = int(self.fmaxTxt.GetValue())
+        winSize = int(self.winSizeTxt.GetValue())
+        hopSize = int(self.hopSizeTxt.GetValue())
+        fmax = int(self.fmaxTxt.GetValue())
+        self.PlayIdx = 0
+        self.timeOffset = 0
+        self.timeSlider.SetValue(0)
+        self.sound.processSpecgram(winSize, hopSize, fmax)
+        self.sound.doPCA()
+        self.bbox = self.sound.getBBox()
+        self.viewFromFront(None)
+        self.Refresh()
+
     def OnLoadSound(self, evt):
         dlg = wx.FileDialog(self, "Choose a file", ".", "", "*", wx.OPEN)
         if dlg.ShowModal() == wx.ID_OK:
@@ -104,18 +120,8 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
             dirname = dlg.GetDirectory()
             print "Loading %s...."%filename
             filepath = os.path.join(dirname, filename)
-            winSize = int(self.winSizeTxt.GetValue())
-            hopSize = int(self.hopSizeTxt.GetValue())
-            fmax = int(self.fmaxTxt.GetValue())
-            self.PlayIdx = 0
-            self.timeOffset = 0
-            self.timeSlider.SetValue(0)
             self.sound.loadAudio(filepath)
-            self.sound.processSpecgram(winSize, hopSize, fmax)
-            self.sound.doPCA()
-            self.bbox = self.sound.getBBox()
-            self.viewFromFront(None)
-            self.Refresh()
+            self.updateParams(None)
             print "Finished loading"
         dlg.Destroy()
         return
@@ -127,7 +133,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
             self.Playing = True
             pygame.mixer.quit()
             pygame.mixer.init(frequency = self.sound.Fs)
-            pygame.mixer.music.load("WeWantARock.ogg")#self.sound.filename)
+            pygame.mixer.music.load("temp.ogg")
             print "Playing at ", self.timeOffset
             pygame.mixer.music.play(0, self.timeOffset)
             self.Refresh()
@@ -211,6 +217,8 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
                         self.Playing = False
                 CurrPoint = self.PlayIDX+1
                 self.Refresh()
+            if CurrPoint >= NPoints:
+                CurrPoint = NPoints-1
             
             self.sound.bindBuffers()
             if self.DrawEdges:
@@ -342,6 +350,10 @@ class MeshViewerFrame(wx.Frame):
         self.glcanvas.fmaxTxt.SetValue("8000")
         ParamPanel.Add(self.glcanvas.fmaxTxt, 0, wx.ALIGN_LEFT)
         self.rightPanel.Add(ParamPanel, 0, wx.EXPAND)
+        
+        updateParamsButton = wx.Button(self, -1, "Update Parameters")
+        self.Bind(wx.EVT_BUTTON, self.glcanvas.updateParams, updateParamsButton)
+        self.rightPanel.Add(updateParamsButton, 0, wx.EXPAND)
         
         #PlayPause
         self.rightPanel.Add(wx.StaticText(self, label="\nPlay/Pause"), 0, wx.EXPAND)
