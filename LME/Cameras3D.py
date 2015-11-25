@@ -4,6 +4,138 @@ from OpenGL.GLUT import *
 import numpy as np
 import math
 
+EPS = 1e-12
+
+def normalizeVec(V):
+    return V/np.sqrt(np.sum(V**2))
+
+class Plane3D(object):
+    #P0 is some point on the plane, N is the normal
+    def __init__(self, P0, N):
+        self.P0 = np.array(P0)
+        self.N = normalizeVec(N)
+        self.resetEquation()
+
+    def resetEquation(self):
+        self.D = -self.P0.dot(self.N)
+
+    def initFromEquation(self, A, B, C, D):
+        N = np.array([A, B, C])
+        self.P0 = (-D/N.dot(N))*np.array([A, B, C])
+        self.N = normalizeVec(N)
+        self.resetEquation()
+
+    def distFromPlane(self, P):
+        return self.N.dot(P) + self.D
+
+    def __str__(self):
+        return "Plane3D: %g*x + %g*y + %g*z + %g = 0"%(self.N[0], self.N[1], self.N[2], self.D)
+
+
+class Line3D(object):
+    def __init__(self, P0, V):
+        self.P0 = np.array(P0)
+        self.V = np.array(V)
+
+    def intersectPlane(self, plane):
+        P0 = plane.P0
+        N = plane.N
+        P = self.P0
+        V = self.V
+        if abs(N.dot(V)) < EPS:
+            return None
+        t = (P0.dot(N) - N.dot(P)) / (N.dot(V))
+        intersectP = P + t*V
+        return [t, intersectP]
+    
+    def intersectOtherLineRet_t(self, other):
+        #Solve for (s, t) in the equation P0 + t*V0 = P1+s*V1
+        #This is three equations (x, y, z components) in 2 variables (s, t)
+        #User cramer's rule and the fact that there is a linear
+        #dependence that only leaves two independent equations
+        #(add the last two equations together)
+        #[a b][t] = [e]
+        #[c d][s]    [f]
+        P0 = self.P0
+        V0 = self.V
+        P1 = other.P0
+        V1 = other.V
+        a = V0[0]+V0[2]
+        b = -(V1[0]+V1[2])
+        c = V0[1] + V0[2]
+        d = -(V1[1]+V1[2])
+        e = P1[0] + P1[2] - (P0[0] + P0[2])
+        f = P1[1] + P1[2] - (P0[1] + P0[2])
+        #print "[%g %g][t] = [%g]\n[%g %g][s]   [%g]"%(a, b, e, c, d, f)
+        detDenom = a*d - c*b
+        #Lines are parallel or skew
+        if abs(detDenom) < EPS:
+            return None
+        detNumt = e*d - b*f
+        detNums = a*f - c*e
+        t = float(detNumt) / float(detDenom)
+        s = float(detNums) / float(detDenom)
+        #print "s = %g, t = %g"%(s, t)
+        return (t, P0 + t*V0)
+    
+    def intersectOtherLine(self, other):
+        ret = self.intersectOtherLineRet_t(other)
+        if ret:
+            return ret[1]
+        return None
+    
+    def __str__(self):
+        return "Line3D: %s + t%s"%(self.P0, self.V)
+
+
+class Ray3D(object):
+    def __init__(self, P0, V):
+        self.P0 = np.array(P0)
+        self.V = normalizeVec(V)
+        self.line = Line3D(self.P0, self.V)
+    
+    def Copy(self):
+        return Ray3D(self.P0, self.V)
+    
+    def Transform(self, matrix):
+        self.P0 = mulHomogenous(matrix, self.P0.flatten())
+        self.V = matrix[0:3, 0:3].dot(self.V)
+        self.V = normalizeVec(self.V)
+    
+    def intersectPlane(self, plane):
+        intersection = self.line.intersectPlane(plane)
+        if intersection:
+            if intersection[0] < 0:
+                return None
+            return intersection
+    
+    def intersectMeshFace(self, face):
+        facePlane = face.getPlane()
+        intersection = self.intersectPlane(facePlane)
+        if not intersection:
+            return None
+        [t, intersectP] = intersection
+        #Now check to see if the intersection is within the polygon
+        #Do this by verifying that intersectP is on the same side
+        #of each segment of the polygon
+        verts = face.getVerticesPos()
+        if verts.shape[0] < 3:
+            return None
+        lastCross = np.cross(verts[1, :]-verts[0, :], intersectP - verts[1, :])
+        lastCross = normalizeVec(lastCross)
+        for i in range(1, verts.shape[0]):
+            v0 = verts[i, :]
+            v1 = verts[(i+1)%verts.shape[0]]
+            cross = np.cross(v1 - v0, intersectP - v1)
+            cross = normalizeVec(cross)
+            if cross.dot(lastCross) < EPS: #The intersection point is on the outside of the polygon
+                return None
+            lastCross = cross
+        return [t, intersectP]
+
+    def __str__(self):
+        return "Ray3D: %s + t%s"%(self.P0, self.V)
+
 class BBox3D(object):
     def __init__(self, b = np.array([[-1, -1, -1], [1, 1, 1]], dtype = 'float32')):
         self.b = b

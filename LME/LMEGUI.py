@@ -27,7 +27,7 @@ DEFAULT_POS = wx.Point(10, 10)
 
 
 #GUI States
-(STATE_NORMAL, STATE_PLAYINGVIDEO) = (0, 1)
+(STATE_NORMAL, STATE_CHOOSELAPLACEVERTICES) = (0, 1)
 #Laplacian substates
 (SUBSTATE_NONE, CHOOSELAPLACE_WAITING, CHOOSELAPLACE_PICKVERTEX) = (0, 1, 2)
 
@@ -78,6 +78,10 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         self.PlayIDX = 0  #Index that's being played in OpenGL
         self.timeOffset = 0 #Used to help keep track of sound position as user jumps around
         
+        #State variables for laplacian mesh operations
+        self.laplacianConstraints = {} #Elements will be key-value pairs (idx, Point3D(new position))
+        self.laplaceCurrentIdx = -1
+        
         #Other GUI Variables
         self.DrawEdges = True
         
@@ -96,6 +100,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         wx.EVT_MOTION(self, self.MouseMotion)        
         #self.initGL()
 
+    #######Sound handles
     def updateParams(self, evt):
         winSize = int(self.winSizeTxt.GetValue())
         hopSize = int(self.hopSizeTxt.GetValue())
@@ -110,6 +115,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         self.sound.doPCA()
         self.bbox = self.sound.getBBox()
         self.viewFromFront(None)
+        self.sound.updateIndexDisplayList()
         self.Refresh()
 
     def OnLoadSound(self, evt):
@@ -130,6 +136,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         if self.Playing:
             return
         if self.sound.Y.size > 0:
+            self.GUIState = STATE_NORMAL
             self.Playing = True
             pygame.mixer.quit()
             pygame.mixer.init(frequency = self.sound.Fs)
@@ -155,6 +162,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         self.timeOffset = time
         self.PlayIDX = 0
 
+    #######View direction handles
     def viewFromFront(self, evt):
         self.camera.centerOnBBox(self.bbox, theta = -math.pi/2, phi = math.pi/2)
         self.Refresh()
@@ -165,6 +173,30 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
     
     def viewFromSide(self, evt):
         self.camera.centerOnBBox(self.bbox, theta = -math.pi, phi = math.pi/2)
+        self.Refresh()
+    
+    #######Laplacian mesh menu handles
+    def doLaplacianMeshSelectVertices(self, evt):
+        if self.sound.YBuf:
+            self.sound.updateIndexDisplayList()
+            self.GUIState = STATE_CHOOSELAPLACEVERTICES
+            self.GUISubstate = CHOOSELAPLACE_WAITING
+            self.Refresh()
+    
+    def clearLaplacianMeshSelection(self, evt):
+        self.laplacianConstraints.clear()
+        self.Refresh()
+    
+    def doLaplacianSolveWithConstraints(self, evt):
+        anchorWeights = 1
+        anchors = np.zeros((len(self.laplacianConstraints), 3))
+        i = 0
+        anchorsIdx = []
+        for anchor in self.laplacianConstraints:
+            anchorsIdx.append(anchor)
+            anchors[i, :] = self.laplacianConstraints[anchor]
+            i += 1
+        #TODO: Finish this
         self.Refresh()
     
     def processEraseBackgroundEvent(self, event): pass #avoid flashing on MSW.
@@ -188,6 +220,36 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
             self.GLinitialized = True
         self.repaint()
 
+    def drawStandard(self, PointSize = 3):
+        glDisable(GL_LIGHTING)
+        glPointSize(PointSize)
+        NPoints = self.sound.Y.shape[0]
+        CurrIdx = NPoints-1
+        if self.Playing:
+            dT = self.timeOffset + float(pygame.mixer.music.get_pos()) / 1000.0
+            sliderPos = int(np.round(1000*dT/(self.sound.getSampleDelay(-1))))
+            self.timeSlider.SetValue(sliderPos)
+            while dT > self.sound.getSampleDelay(self.PlayIDX):
+                self.PlayIDX += 1
+                if self.PlayIDX == NPoints - 1:
+                    self.Playing = False
+            CurrIdx = self.PlayIDX+1
+            self.Refresh()
+        if CurrIdx >= NPoints:
+            CurrIdx = NPoints-1
+        
+        self.sound.bindBuffers()
+        if self.DrawEdges:
+            if NPoints % 2 == 0:
+                glDrawArrays(GL_LINES, 0, NPoints)
+                glDrawArrays(GL_LINES, 1, NPoints-2)
+            else:
+                glDrawArrays(GL_LINES, 0, NPoints-1)
+                glDrawArrays(GL_LINES, 1, NPoints-1)
+        glDrawArrays(GL_POINTS, 0, NPoints)
+        self.sound.unbindBuffers()
+        return CurrIdx
+
     def repaint(self):
         #Set up projection matrix
         glMatrixMode(GL_PROJECTION)
@@ -201,42 +263,62 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         glClearColor(0.0, 0.0, 0.0, 0.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     
-        if self.sound.Y.size > 0:
-            glDisable(GL_LIGHTING)
-            glColor3f(1, 0, 0)
-            glPointSize(3)
-            NPoints = self.sound.Y.shape[0]
-            CurrPoint = NPoints-1
+        if self.GUIState == STATE_NORMAL:
+            if self.sound.Y.size > 0:
+                CurrIdx = self.drawStandard()
+                #Draw current point in time
+                glPointSize(15)
+                glBegin(GL_POINTS)
+                glColor3f(1, 1, 1)
+                x = self.sound.Y[CurrIdx, :]
+                glVertex3f(x[0], x[1], x[2])
+                glEnd()     
+        elif self.GUIState == STATE_CHOOSELAPLACEVERTICES:
             if self.Playing:
-                dT = self.timeOffset + float(pygame.mixer.music.get_pos()) / 1000.0
-                sliderPos = int(np.round(1000*dT/(self.sound.getSampleDelay(-1))))
-                self.timeSlider.SetValue(sliderPos)
-                while dT > self.sound.getSampleDelay(self.PlayIDX):
-                    self.PlayIDX += 1
-                    if self.PlayIDX == NPoints - 1:
-                        self.Playing = False
-                CurrPoint = self.PlayIDX+1
+                self.OnPause(None)
+            self.drawStandard()
+            if self.GUISubstate == CHOOSELAPLACE_WAITING:
+                glDisable(GL_LIGHTING)
+                glPointSize(POINT_SIZE)
+                glBegin(GL_POINTS)
+                for idx in self.laplacianConstraints:
+                    P = self.sound.Y[idx, :]
+                    glColor3f(0, 1, 0)
+                    glVertex3f(P[0], P[1], P[2])
+                    P = self.laplacianConstraints[idx]
+                    if idx == self.laplaceCurrentIdx:
+                        glColor3f(1, 0, 0)
+                    else:
+                        glColor3f(0, 0, 1)
+                    glVertex3f(P[0], P[1], P[2])
+                glEnd()
+                glColor3f(1, 1, 0)
+                glBegin(GL_LINES)
+                for idx in self.laplacianConstraints:
+                    P1 = self.sound.Y[idx, :]
+                    P2 = self.laplacianConstraints[idx]
+                    glVertex3f(P1[0], P1[1], P1[2])
+                    glVertex3f(P2[0], P2[1], P2[2])
+                glEnd()
+                self.drawStandard(POINT_SIZE)
+                
+            elif self.GUISubstate == CHOOSELAPLACE_PICKVERTEX:
+                glClearColor(0.0, 0.0, 0.0, 0.0)
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                glCallList(self.sound.IndexDisplayList)
+                pixel = glReadPixels(self.MousePos[0], self.MousePos[1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE)
+                [R, G, B, A] = [int(pixel.encode("hex")[i*2:(i+1)*2], 16) for i in range(4)]
+                idx = extractFromRGBA(R, G, B, 0) - 1
+                if idx >= 0 and idx < self.sound.Y.shape[0]:
+                    if idx in self.laplacianConstraints:
+                        #De-select if it's already selected
+                        self.laplaceCurrentIdx = -1
+                        self.laplacianConstraints.pop(idx, None)
+                    else:
+                        self.laplacianConstraints[idx] = np.array(self.sound.Y[idx, :])
+                        self.laplaceCurrentIdx = idx
+                self.GUISubstate = CHOOSELAPLACE_WAITING
                 self.Refresh()
-            if CurrPoint >= NPoints:
-                CurrPoint = NPoints-1
-            
-            self.sound.bindBuffers()
-            if self.DrawEdges:
-                if NPoints % 2 == 0:
-                    glDrawArrays(GL_LINES, 0, NPoints)
-                    glDrawArrays(GL_LINES, 1, NPoints-2)
-                else:
-                    glDrawArrays(GL_LINES, 0, NPoints-1)
-                    glDrawArrays(GL_LINES, 1, NPoints-1)
-            glDrawArrays(GL_POINTS, 0, NPoints)
-            self.sound.unbindBuffers()
-            
-            glPointSize(8)
-            glBegin(GL_POINTS)
-            glColor3f(1, 1, 1)
-            x = self.sound.Y[CurrPoint, :]
-            glVertex3f(x[0], x[1], x[2])
-            glEnd()
             
         self.SwapBuffers()
     
@@ -258,6 +340,10 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
 
     def MouseDown(self, evt):
         state = wx.GetMouseState()
+        if self.GUIState == STATE_CHOOSELAPLACEVERTICES:
+            if state.ShiftDown():
+                #Pick vertex for laplacian mesh constraints
+                self.GUISubstate = CHOOSELAPLACE_PICKVERTEX
         x, y = evt.GetPosition()
         self.CaptureMouse()
         self.handleMouseStuff(x, y)
@@ -277,18 +363,37 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         dX = self.MousePos[0] - lastX
         dY = self.MousePos[1] - lastY
         if evt.Dragging():
-            #Translate/rotate shape
-            if evt.MiddleIsDown():
-                self.camera.translate(dX, dY)
-            elif evt.RightIsDown():
-                self.camera.zoom(-dY)#Want to zoom in as the mouse goes up
-            elif evt.LeftIsDown():
-                self.camera.orbitLeftRight(dX)
-                self.camera.orbitUpDown(dY)
+            idx = self.laplaceCurrentIdx
+            if self.GUIState == STATE_CHOOSELAPLACEVERTICES and state.ControlDown() and self.laplaceCurrentIdx in self.laplacianConstraints:
+                #Move up laplacian mesh constraint based on where the user drags
+                #the mouse
+                t = self.camera.towards
+                u = self.camera.up
+                r = np.cross(t, u)
+                P0 = self.laplacianConstraints[idx]
+                #Construct a plane going through the point which is parallel to the
+                #viewing plane
+                plane = Plane3D(P0, t)
+                #Construct a ray through the pixel where the user is clicking
+                tanFOV = math.tan(self.camera.yfov/2)
+                scaleX = tanFOV*(self.MousePos[0] - self.size.x/2)/(self.size.x/2)
+                scaleY = tanFOV*(self.MousePos[1] - self.size.y/2)/(self.size.y/2)
+                V = t + scaleX*r + scaleY*u
+                ray = Ray3D(self.camera.eye, V)
+                self.laplacianConstraints[idx] = ray.intersectPlane(plane)[1]
+            else:
+                #Translate/rotate shape
+                if evt.MiddleIsDown():
+                    self.camera.translate(dX, dY)
+                elif evt.RightIsDown():
+                    self.camera.zoom(-dY)#Want to zoom in as the mouse goes up
+                elif evt.LeftIsDown():
+                    self.camera.orbitLeftRight(dX)
+                    self.camera.orbitUpDown(dY)
         self.Refresh()
 
 class MeshViewerFrame(wx.Frame):
-    (ID_LoadSound, ID_SAVESCREENSHOT) = (1, 2)
+    (ID_LoadSound, ID_SAVESCREENSHOT, ID_SELECTLAPLACEVERTICES, ID_CLEARLAPLACEVERTICES, ID_SOLVEWITHCONSTRAINTS) = (1, 2, 3, 4, 5)
     
     def __init__(self, parent, id, title, pos=DEFAULT_POS, size=DEFAULT_SIZE, style=wx.DEFAULT_FRAME_STYLE, name = 'GLWindow'):
         style = style | wx.NO_FULL_REPAINT_ON_RESIZE
@@ -311,10 +416,19 @@ class MeshViewerFrame(wx.Frame):
         menuExit = filemenu.Append(wx.ID_EXIT,"E&xit"," Terminate the program")
         self.Bind(wx.EVT_MENU, self.OnExit, menuExit)
         
+        #####Laplacian Mesh Menu
+        laplacianMenu = wx.Menu()
+        menuSelectLaplaceVertices = laplacianMenu.Append(MeshViewerFrame.ID_SELECTLAPLACEVERTICES, "&Select Laplace Vertices", "Select Laplace Vertices")
+        self.Bind(wx.EVT_MENU, self.glcanvas.doLaplacianMeshSelectVertices, menuSelectLaplaceVertices)
+        menuClearLaplaceVertices = laplacianMenu.Append(MeshViewerFrame.ID_CLEARLAPLACEVERTICES, "&Clear vertex selection", "Clear Vertex Selection")
+        self.Bind(wx.EVT_MENU, self.glcanvas.clearLaplacianMeshSelection, menuClearLaplaceVertices)
+        menuSolveWithConstraints = laplacianMenu.Append(MeshViewerFrame.ID_SOLVEWITHCONSTRAINTS, "&Solve with Constraints", "Solve with Constraints")
+        self.Bind(wx.EVT_MENU, self.glcanvas.doLaplacianSolveWithConstraints, menuSolveWithConstraints)
         
         # Creating the menubar.
         menuBar = wx.MenuBar()
         menuBar.Append(filemenu,"&File") # Adding the "filemenu" to the MenuBar
+        menuBar.Append(laplacianMenu,"&MeshLaplacian") # Adding the "filemenu" to the MenuBar
         self.SetMenuBar(menuBar)  # Adding the MenuBar to the Frame content.
         
         self.rightPanel = wx.BoxSizer(wx.VERTICAL)
