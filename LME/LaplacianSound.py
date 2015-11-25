@@ -1,6 +1,8 @@
 import librosa
 import numpy as np
 import scipy.io as sio
+import scipy.linalg
+from scipy import sparse
 import matplotlib.pyplot as plt
 from OpenGL.GL import *
 from OpenGL.arrays import vbo
@@ -41,7 +43,19 @@ class LaplacianSound(object):
 
     def loadAudio(self, filename):
         self.filename = filename
-        self.XAudio, self.Fs = librosa.load(filename)
+        fileparts = filename.split(".")
+        if not fileparts[-1] == "wav":
+            os.remove("temp.wav")
+            subprocess.call(["avconv", "-i", filename, "temp.wav"])
+            #self.XAudio, self.Fs = librosa.load("temp.wav")
+            self.Fs, self.XAudio = sio.wavfile.read("temp.wav")
+            self.XAudio = self.XAudio.T
+        else:
+            #self.XAudio, self.Fs = librosa.load(filename)
+            self.Fs, self.XAudio = sio.wavfile.read(filename)
+            self.XAudio = self.XAudio.T
+            print self.XAudio.shape
+        print "Fs = %i"%self.Fs
         self.XAudio = librosa.core.to_mono(self.XAudio)
         #Convert to a format that can be played by pygame
         os.remove("temp.ogg")
@@ -128,3 +142,47 @@ class LaplacianSound(object):
             glVertex3f(P[0], P[1], P[2])
         glEnd()
         glEndList()
+    
+    def doLaplacianWarp(self, anchorsIdx, anchors, anchorWeights):
+        #Step 1: Create laplacian matrix
+        N = self.Y.shape[0] #Number of vertices
+        M = N - 1 #Number of edges
+        L = np.zeros((N, N))
+        I = np.zeros(M*2)
+        J = np.zeros(M*2)
+        V = np.ones(M*2)
+        I[0:M] = np.arange(0, N-1)
+        J[0:M] = np.arange(1, N)
+        I[M:2*M] = np.arange(1, N)
+        J[M:2*M] = np.arange(0, N-1)
+        L = sparse.coo_matrix((V, (I, J)), shape=(N, N)).tocsr()
+        L = sparse.dia_matrix((L.sum(1).flatten(), 0), L.shape) - L
+        deltaCoords = L.dot(self.Y)
+        
+        #Step 2: Add anchors
+        L = L.tocoo()
+        I = L.row.tolist()
+        J = L.col.tolist()
+        V = L.data.tolist()
+        I = I + range(N, N+len(anchors))
+        J = J + anchorsIdx
+        V = V + [anchorWeights]*len(anchorsIdx)
+        L = sparse.coo_matrix((V, (I, J)), shape=(N+len(anchorsIdx), N)).tocsr()
+        
+        #Step 3: Solve for new positions
+        y = np.concatenate((deltaCoords, anchorWeights*anchors), 0)
+        #Y = scipy.linalg.lstsq(L, y)
+        #Use octave for now because scipy doesn't seem to work
+        sio.savemat("LapVars.mat", {"L":L, "I":I, "J":J, "V":V, "M":L.shape[0], "N":L.shape[1], "Y":self.Y, "y":y})
+        print "Solving..."
+        #Y = octave.solveLSQROctave(I, J, V, L.shape[0], L.shape[1], y)
+        subprocess.call(["octave", "solveLSQROctave.m"])
+        self.Y = np.loadtxt("LapY.txt")
+        print "Finished solving"
+        
+        self.YBuf.delete()
+        self.YBuf = vbo.VBO(np.array(self.Y, dtype=np.float32))
+        self.updateIndexDisplayList()
+        
+        #TODO: Change sound
+        #Subtract away original 3 components and put these in their place

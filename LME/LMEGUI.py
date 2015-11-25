@@ -138,6 +138,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         if self.sound.Y.size > 0:
             self.GUIState = STATE_NORMAL
             self.Playing = True
+            self.PlayIDX = 0
             pygame.mixer.quit()
             pygame.mixer.init(frequency = self.sound.Fs)
             pygame.mixer.music.load("temp.ogg")
@@ -161,6 +162,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
             pygame.mixer.music.play(0, time)
         self.timeOffset = time
         self.PlayIDX = 0
+        self.Refresh()
 
     #######View direction handles
     def viewFromFront(self, evt):
@@ -188,7 +190,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         self.Refresh()
     
     def doLaplacianSolveWithConstraints(self, evt):
-        anchorWeights = 1
+        anchorWeights = 1#np.mean(np.std(self.sound.Y, 0))
         anchors = np.zeros((len(self.laplacianConstraints), 3))
         i = 0
         anchorsIdx = []
@@ -196,7 +198,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
             anchorsIdx.append(anchor)
             anchors[i, :] = self.laplacianConstraints[anchor]
             i += 1
-        #TODO: Finish this
+        self.sound.doLaplacianWarp(anchorsIdx, anchors, anchorWeights)
         self.Refresh()
     
     def processEraseBackgroundEvent(self, event): pass #avoid flashing on MSW.
@@ -225,15 +227,18 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         glPointSize(PointSize)
         NPoints = self.sound.Y.shape[0]
         CurrIdx = NPoints-1
+        dT = self.timeOffset
         if self.Playing:
-            dT = self.timeOffset + float(pygame.mixer.music.get_pos()) / 1000.0
-            sliderPos = int(np.round(1000*dT/(self.sound.getSampleDelay(-1))))
-            self.timeSlider.SetValue(sliderPos)
-            while dT > self.sound.getSampleDelay(self.PlayIDX):
-                self.PlayIDX += 1
-                if self.PlayIDX == NPoints - 1:
-                    self.Playing = False
-            CurrIdx = self.PlayIDX+1
+            dT += float(pygame.mixer.music.get_pos()) / 1000.0
+        sliderPos = int(np.round(1000*dT/(self.sound.getSampleDelay(-1))))
+        self.timeSlider.SetValue(sliderPos)
+        self.TimeTxt.SetValue("%g"%dT)
+        while dT > self.sound.getSampleDelay(self.PlayIDX):
+            self.PlayIDX += 1
+            if self.PlayIDX == NPoints - 1:
+                self.Playing = False
+        CurrIdx = self.PlayIDX+1
+        if self.Playing:
             self.Refresh()
         if CurrIdx >= NPoints:
             CurrIdx = NPoints-1
