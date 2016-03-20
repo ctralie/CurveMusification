@@ -1,27 +1,30 @@
-W = 16384;
-H = 32;
+% W = 16384;
+% H = 32;
+W = 512;
+H = 256;
+HEmbed = 1;
 [X, Fs] = audioread('AddictedToLoveClip.wav');
-S = STFT(X, W, H);
+S = STFT(X, W, HEmbed);
 S = abs(S);
 NBins = size(S, 2);
-S = S(:, 1:150);
+%S = S(:, 1:2600);
 
 %Figure out the approximate scale of the spectrogram point cloud
 Scale = bsxfun(@minus, mean(S, 1), S);
-Scale = 2*max(sqrt(sum(Scale.^2, 2)));
+Scale = 0.5*max(sqrt(sum(Scale.^2, 2)));
 
-t = linspace(0, 1, size(S, 1));
+t = linspace(0, 1, size(S, 1)/(H/HEmbed));
+X = Scale*[cos(2*pi*t(:)) sin(2*pi*t(:))];
 
-X = Scale*[cos(2*pi*t(:)) sin(2*pi*2*t(:))];
-X = [X zeros(size(X, 1), size(S, 2) - 2)];
-X = X + repmat(mean(S, 1), [size(X, 1), 1]);
+SOut = traceCurve(X, S, 10, 0);
 
-[T, ~, iters] = FICP(X, S, 0.5, 10);
-X = [X ones(size(X, 1), 1)];
-X = (T*X')';
-X = X(:, 1:end-1);
-X(X < 0) = 0;
+Z = [SOut; S];
+[~, Y] = pca(Z);
+clf;
+N = size(SOut, 1);
+plot3(Y(1:N, 1), Y(1:N, 2), Y(1:N, 3), 'b.');
+hold on;
+plot3(Y(N+1:end, 1), Y(N+1:end, 2), Y(N+1:end, 3), 'r.');
 
-X = [X zeros(size(X, 1), NBins - size(X, 2))];
-Y = griffinLimInverse(X, W, H, 10);
+Y = griffinLimInverse(SOut, W, H, 10);
 audiowrite('CircleTry1.wav', Y, Fs);

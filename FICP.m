@@ -1,8 +1,19 @@
 %Implement point to point fractional RMSD ICP from P1 to P2, as described in 
 %"Outlier Robust ICP for Minimizing Fractional RMSD" (2007): Phillips, Liu, Tomasi
-function [ TFinal, P, iters, fs ] = FICP( P1, P2, lambda, MaxIter )
+function [ TFinal, P, P1f, corresp, iters, fs ] = FICP( P1, P2, lambda, MaxIter, DORESAMPLE, DOPLOT )
+    if nargin < 5
+        DORESAMPLE = 0;
+    end
+    if nargin < 6
+        DOPLOT = 0;
+    end
     dim = size(P1, 2);
     
+    if DORESAMPLE
+        %P1, P2 have points evenly spaced by arc length after this
+        [~, ~, P1] = addSamplesByArcLength(P1, 2*size(P1, 1));
+        [~, ~, P2] = addSamplesByArcLength(P2, 2*size(P2, 1));
+    end
     N1 = size(P1, 1);
     N2 = size(P2, 1);
     s1 = linspace(0, 1, N1);
@@ -21,8 +32,18 @@ function [ TFinal, P, iters, fs ] = FICP( P1, P2, lambda, MaxIter )
         end
     end
     
-%     %Use a KD Tree to speed up nearest neighbor queries
-%     KDTree2 = KDTreeSearcher(P2);
+    if DOPLOT
+        Colors = colormap(sprintf('jet(%i)', N2));
+    end
+    
+    %Use a KD Tree to speed up nearest neighbor queries
+    KDTree2 = KDTreeSearcher(P2);
+    
+    AllP = [P1; P2];
+    xmin = min(AllP(:, 1)) - 0.5;
+    xmax = max(AllP(:, 1)) + 0.5;
+    ymin = min(AllP(:, 2)) - 0.5;
+    ymax = max(AllP(:, 2)) + 0.5;
     iters = zeros(1, MaxIter);
     fs = zeros(1, MaxIter);
     fcoeffs = (N1./(1:N1)').^lambda;
@@ -37,11 +58,31 @@ function [ TFinal, P, iters, fs ] = FICP( P1, P2, lambda, MaxIter )
     T = eye(dim+1);
     
     for iter = 1:MaxIter
-        fprintf(1, 'Iteration %i of %i\n', iter, MaxIter);
         TFinal = TFinal*T;
         fs(iter) = f/N1;
         %Compute P1f, the subset of size f*N1 of P1 minimizing RMSD(P1f, P2, corresp)
         P1f = P1f(1:f);
+        
+        if DOPLOT
+            clf;
+            P = [P1 ones(N1, 1)];
+            P = (T*P')';
+            scatter(P(:, 1), P(:, 2), 20, Colors(corresp, :), 'fill');
+            hold on;
+            %scatter(P2(:, 1), P2(:, 2), 20, Colors, 'fill');
+            plot(P2(:, 1), P2(:, 2), 'k.');
+            xlim([xmin, xmax]);
+            ylim([ymin, ymax]);
+            title(sprintf('Iteration %i', iter));
+            thisidx = 1:N1;
+            thisidx(P1f) = 0;
+            thisidx = thisidx(thisidx > 0);
+            plot(P(thisidx, 1), P(thisidx, 2), 'x');
+            for ff = 1:f
+                plot([P(P1f(ff), 1), P2(corresp(P1f(ff)), 1)], [P(P1f(ff), 2), P2(corresp(P1f(ff)), 2)], 'g');
+            end
+            print('-dpng', '-r100', sprintf('%i.png', iter));
+        end 
         
         %Compute the optimal transformation of this set of points with
         %their correspondences
@@ -54,23 +95,20 @@ function [ TFinal, P, iters, fs ] = FICP( P1, P2, lambda, MaxIter )
         %Transform the points to their updated locations and find the
         %new correspondences
         P1 = P(:, 1:dim);
-        imagesc(P1);
-        title(sprintf('Iteration %i', iter));
-        print('-dpng', '-r100', sprintf('%i.png', iter));
-%         [corresp, dists] = KDTree2.knnsearch(P1, 'K', 1);
-        D = bsxfun(@plus, sum(P1.^2, 2), sum(P2.^2, 2)') - 2*P1*P2';
-        [dists, corresp] = min(D, [], 2);
+        [corresp, dists] = KDTree2.knnsearch(P1, 'K', 1);
         if sum(corresp == lastcorresp) == N1
             %If it's converged
             break;
         end        
         
         %Compute the optimal fraction f given the correspondences
-        [dists, P1f] = sort(dists);
+        [dists, P1f] = sort(dists.^2);
         RMSD = sqrt(cumsum(dists)./(1:N1)');
         [minval, f] = min(RMSD.*fcoeffs);        
         iters(iter) = minval;   
     end
+    P1f = P1f(1:f);
+    corresp = corresp(P1f);
     iters = iters(1:iter);
     P = P(:, 1:dim);
 end

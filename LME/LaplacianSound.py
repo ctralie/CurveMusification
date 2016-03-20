@@ -10,6 +10,10 @@ from pylab import cm
 from Cameras3D import *
 import subprocess
 import os
+this_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, this_path + '/../ext/libigl/python/')
+sys.path.insert(0, this_path + '/../ext/lib/')
+import igl
 
 POINT_SIZE = 10
 
@@ -67,14 +71,18 @@ class LaplacianSound(object):
         self.M = librosa.filters.mel(self.Fs, winSize, fmax = pfmax)
         self.X = self.M.dot(np.abs(self.S))
 
-    def doPCA(self):
+    def doPCA(self, dims = 3):
         #Do PCA on mel-spaced STFT and update vertex and color buffers
         X = self.X.T - np.mean(self.X.T, 0)
         D = (X.T).dot(X)/X.shape[0]
         (lam, eigvecs) = np.linalg.eig(D)
         lam = np.abs(lam)
-        self.varExplained = np.sum(lam[0:3])/np.sum(lam)
-        self.PCs = eigvecs[:, 0:3]
+        idx = np.argsort(-lam)
+        print idx
+        lam = lam[idx]
+        eigvecs = eigvecs[:, idx]
+        self.varExplained = np.sum(lam[0:dims])/np.sum(lam)
+        self.PCs = eigvecs[:, 0:dims]
         self.Y = X.dot(self.PCs)
         if self.YBuf:
             self.YBuf.delete()
@@ -139,11 +147,15 @@ class LaplacianSound(object):
             P = self.Y[i, :]
             [R, G, B, A] = splitIntoRGBA(i+1)
             glColor4ub(R, G, B, A)
-            glVertex3f(P[0], P[1], P[2])
+            if P.size == 3:
+                glVertex3f(P[0], P[1], P[2])
+            else:
+                glVertex2f(P[0], P[1])
         glEnd()
         glEndList()
     
-    def doLaplacianWarp(self, anchorsIdx, anchors, anchorWeights):
+    def doLaplacianWarp(self, anchorsIdx, anchors, anchorWeights, dims = 3):
+        #https://ensiwiki.ensimag.fr/index.php/Alexandre_Ribard_:_Laplacian_Curve_Editing_--_Detail_Preservation
         #Step 1: Create laplacian matrix
         N = self.Y.shape[0] #Number of vertices
         M = N - 1 #Number of edges
@@ -158,31 +170,52 @@ class LaplacianSound(object):
         L = sparse.coo_matrix((V, (I, J)), shape=(N, N)).tocsr()
         L = sparse.dia_matrix((L.sum(1).flatten(), 0), L.shape) - L
         deltaCoords = L.dot(self.Y)
+        coo = L.tocoo()
+        coo = np.vstack((coo.row, coo.col, coo.data)).T
+        coo = igl.eigen.MatrixXd(np.array(coo, dtype=np.float64))
+        LE = igl.eigen.SparseMatrixd()
+        LE.fromCOO(coo)
         
         #Step 2: Add anchors
-        L = L.tocoo()
-        I = L.row.tolist()
-        J = L.col.tolist()
-        V = L.data.tolist()
-        I = I + range(N, N+len(anchors))
-        J = J + anchorsIdx
-        V = V + [anchorWeights]*len(anchorsIdx)
-        L = sparse.coo_matrix((V, (I, J)), shape=(N+len(anchorsIdx), N)).tocsr()
+        #TODO: Add first and last points as anchors?
+        Q = (LE.transpose())*LE
+        #Now add in sparse constraints
+        diagTerms = igl.eigen.SparseMatrixd(N, N)
+        # anchor points
+        for a in anchorsIdx:
+            diagTerms.insert(a, a, anchorWeights)
+        Q = Q + diagTerms
+        Q.makeCompressed()
+        solver = igl.eigen.SimplicialLLTsparse(Q)
         
         #Step 3: Solve for new positions
-        y = np.concatenate((deltaCoords, anchorWeights*anchors), 0)
-        #Y = scipy.linalg.lstsq(L, y)
-        #Use octave for now because scipy doesn't seem to work
-        sio.savemat("LapVars.mat", {"L":L, "I":I, "J":J, "V":V, "M":L.shape[0], "N":L.shape[1], "Y":self.Y, "y":y})
-        print "Solving..."
-        #Y = octave.solveLSQROctave(I, J, V, L.shape[0], L.shape[1], y)
-        subprocess.call(["octave", "solveLSQROctave.m"])
-        self.Y = np.loadtxt("LapY.txt")
-        print "Finished solving"
+        y = np.array(LE*igl.eigen.MatrixXd(np.array(deltaCoords[:, 0:dims], dtype=np.float64)))
+        y[anchorsIdx] += anchorWeights*anchors
+        y = igl.eigen.MatrixXd(y)
+        ret = solver.solve(y)
+        self.Y = np.array(ret)
         
         self.YBuf.delete()
         self.YBuf = vbo.VBO(np.array(self.Y, dtype=np.float32))
         self.updateIndexDisplayList()
         
+        #Step 4: Change mel spectrum
         #TODO: Change sound
         #Subtract away original 3 components and put these in their place
+        
+    def invertNewMelSpectrum(self, XNew):
+        #Step 1: Create a new STFT with a scaled envelope
+        MEnergy = np.sum(self.M, 0)
+        idxpass = (MEnergy == 0)
+        MEnergy[idxpass] = 1
+        Ratio = XNew/(self.X + 0j)
+        Ratio[self.X == 0] = 1
+        SNew = np.zeros(self.S.shape) + 0j
+        for i in range(SNew.shape[1]):
+            for k in range(self.M.shape[0]):
+                SNew[:, i] += ((self.M[k, :].flatten())*(self.S[:, i].flatten()))*Ratio[k, i]
+        SNew = SNew/MEnergy[:, None] #Normalize Mel-spaced envelope
+        SNew[idxpass, :] = self.S[idxpass, :] #Passband (
+        #Step 2: Perform Griffin Lim iterative phase retrieval
+        y = librosa.core.istft(SNew, self.hopSize, self.winSize)
+        return y

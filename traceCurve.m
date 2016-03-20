@@ -1,4 +1,4 @@
-function [ XOut ] = traceCurve( Y, X, K, DOPLOT )
+function [ XOut, idx ] = traceCurve( Y, X, K, DOPLOT )
     DTarget = squareform(pdist(Y));
     NX = size(X, 1);
     NY = size(Y, 1);
