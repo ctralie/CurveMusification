@@ -253,6 +253,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
                 glDrawArrays(GL_LINES, 1, NPoints-1)
         glDrawArrays(GL_POINTS, 0, NPoints)
         self.sound.unbindBuffers()
+        
         return CurrIdx
 
     def repaint(self):
@@ -267,7 +268,8 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         self.camera.gotoCameraFrame()    
         glClearColor(0.0, 0.0, 0.0, 0.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-    
+        CurrIdx = 0
+        
         if self.GUIState == STATE_NORMAL:
             if self.sound.Y.size > 0:
                 CurrIdx = self.drawStandard()
@@ -277,12 +279,13 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
                 glColor3f(1, 1, 1)
                 x = self.sound.Y[CurrIdx, :]
                 glVertex3f(x[0], x[1], x[2])
-                glEnd()     
+                glEnd()
+                self.sound.drawSpecgram(self.size.width, self.size.height, CurrIdx)
         elif self.GUIState == STATE_CHOOSELAPLACEVERTICES:
             if self.Playing:
                 self.OnPause(None)
-            self.drawStandard()
             if self.GUISubstate == CHOOSELAPLACE_WAITING:
+                CurrIdx = self.drawStandard()
                 glDisable(GL_LIGHTING)
                 glPointSize(POINT_SIZE)
                 glBegin(GL_POINTS)
@@ -304,9 +307,11 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
                     P2 = self.laplacianConstraints[idx]
                     glVertex3f(P1[0], P1[1], P1[2])
                     glVertex3f(P2[0], P2[1], P2[2])
+                    CurrIdx = idx
                 glEnd()
-                self.drawStandard(POINT_SIZE)
-                
+                glColor3f(1, 1, 1) #For some reason this is needed for the 
+                #spectrogram colors to show up properly at this point
+                self.sound.drawSpecgram(self.size.width, self.size.height, CurrIdx)
             elif self.GUISubstate == CHOOSELAPLACE_PICKVERTEX:
                 glClearColor(0.0, 0.0, 0.0, 0.0)
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -324,7 +329,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
                         self.laplaceCurrentIdx = idx
                 self.GUISubstate = CHOOSELAPLACE_WAITING
                 self.Refresh()
-            
+        
         self.SwapBuffers()
     
     def initGL(self):        

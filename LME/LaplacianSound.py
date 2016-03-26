@@ -44,6 +44,7 @@ class LaplacianSound(object):
         self.YColorsBuf = None #Vertex colors
         self.varExplained = 0.0 #Variance explained
         self.IndexDisplayList = -1 #Used to help select laplacian anchors
+        self.texID = None #Texture pointer for spectrogram image
 
     def loadAudio(self, filename):
         self.filename = filename
@@ -65,12 +66,64 @@ class LaplacianSound(object):
         os.remove("temp.ogg")
         subprocess.call(["avconv", "-i", filename, "temp.ogg"])
 
+    def updateSpecgramTexture(self):
+        W = self.X.shape[1]
+        H = self.X.shape[0]
+        #x = librosa.core.logamplitude(self.X.flatten())
+        x = self.X.flatten()
+        x = x - np.min(x)
+        x = x/np.max(x)
+        cmap = plt.get_cmap('jet')
+        C = np.array(np.round(255.0*cmap(x)), dtype=np.uint8).flatten()
+        if not self.texID:   
+            self.texID = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.texID)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexImage2D(GL_TEXTURE_2D, 0, 3, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, C)
+
     def processSpecgram(self, winSize, hopSize, pfmax):
         [self.winSize, self.hopSize, self.fmax] = [winSize, hopSize, pfmax]
         self.S = librosa.core.stft(self.XAudio, winSize, hopSize)
         self.M = librosa.filters.mel(self.Fs, winSize, fmax = pfmax)
         self.X = self.M.dot(np.abs(self.S))
+        self.updateSpecgramTexture()
 
+    
+    def drawSpecgram(self, width, height, CurrIdx):
+        if not self.texID:
+            return
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_LIGHTING)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        gluOrtho2D(0, width, 0, height)
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+        
+        #Draw spectrogram
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, self.texID)
+        glBegin(GL_QUADS)
+        H = 150
+        glTexCoord2f(1.0, 0.0); glVertex2i(width, 0)
+        glTexCoord2f(1.0,1.0); glVertex2i(width, H)
+        glTexCoord2f(0.0, 1.0); glVertex2i(0, H)
+        glTexCoord2f(0.0,0.0); glVertex2i(0, 0)
+        glEnd()
+        glDisable(GL_TEXTURE_2D)
+        
+        #Draw line segment marker
+        glColor3f(1, 0, 0)
+        pos = float(width)*CurrIdx/self.X.shape[1]
+        glBegin(GL_LINES)
+        glVertex2f(pos, 0)
+        glVertex2f(pos, H)
+        glEnd()
+        glEnable(GL_LIGHTING)
+        glEnable(GL_DEPTH_TEST)
+    
     def doPCA(self, dims = 3):
         #Do PCA on mel-spaced STFT and update vertex and color buffers
         X = self.X.T - np.mean(self.X.T, 0)
@@ -78,7 +131,6 @@ class LaplacianSound(object):
         (lam, eigvecs) = np.linalg.eig(D)
         lam = np.abs(lam)
         idx = np.argsort(-lam)
-        print idx
         lam = lam[idx]
         eigvecs = eigvecs[:, idx]
         self.varExplained = np.sum(lam[0:dims])/np.sum(lam)
@@ -154,7 +206,7 @@ class LaplacianSound(object):
         glEnd()
         glEndList()
     
-    def doLaplacianWarp(self, anchorsIdx, anchors, anchorWeights, dims = 3):
+    def doLaplacianWarp(self, anchorsIdx, anchors, anchorWeights, dims = 3, weighted = True):
         #https://ensiwiki.ensimag.fr/index.php/Alexandre_Ribard_:_Laplacian_Curve_Editing_--_Detail_Preservation
         #Step 1: Create laplacian matrix
         N = self.Y.shape[0] #Number of vertices
@@ -162,7 +214,12 @@ class LaplacianSound(object):
         L = np.zeros((N, N))
         I = np.zeros(M*2)
         J = np.zeros(M*2)
+        
         V = np.ones(M*2)
+        if weighted:
+            Ds = np.sqrt(np.sum((self.Y[1:, :] - self.Y[0:-1, :])**2, 1))
+            V = np.concatenate((Ds[:, None], Ds[:, None]), 0).flatten()
+        print V
         I[0:M] = np.arange(0, N-1)
         J[0:M] = np.arange(1, N)
         I[M:2*M] = np.arange(1, N)
