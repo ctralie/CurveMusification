@@ -190,7 +190,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
         self.Refresh()
     
     def doLaplacianSolveWithConstraints(self, evt):
-        anchorWeights = 1#np.mean(np.std(self.sound.Y, 0))
+        anchorWeights = 1e8#np.mean(np.std(self.sound.Y, 0))
         anchors = np.zeros((len(self.laplacianConstraints), 3))
         i = 0
         anchorsIdx = []
@@ -199,6 +199,7 @@ class MeshViewerCanvas(glcanvas.GLCanvas):
             anchors[i, :] = self.laplacianConstraints[anchor]
             i += 1
         self.sound.doLaplacianWarp(anchorsIdx, anchors, anchorWeights)
+        self.bbox = self.sound.getBBox()
         self.Refresh()
     
     def processEraseBackgroundEvent(self, event): pass #avoid flashing on MSW.

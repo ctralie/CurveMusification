@@ -63,7 +63,8 @@ class LaplacianSound(object):
         print "Fs = %i"%self.Fs
         self.XAudio = librosa.core.to_mono(self.XAudio)
         #Convert to a format that can be played by pygame
-        os.remove("temp.ogg")
+        if os.path.exists("temp.ogg"):
+            os.remove("temp.ogg")
         subprocess.call(["avconv", "-i", filename, "temp.ogg"])
 
     def updateSpecgramTexture(self):
@@ -216,16 +217,22 @@ class LaplacianSound(object):
         J = np.zeros(M*2)
         
         V = np.ones(M*2)
+        weighted = False
         if weighted:
             Ds = np.sqrt(np.sum((self.Y[1:, :] - self.Y[0:-1, :])**2, 1))
             V = np.concatenate((Ds[:, None], Ds[:, None]), 0).flatten()
-        print V
         I[0:M] = np.arange(0, N-1)
         J[0:M] = np.arange(1, N)
         I[M:2*M] = np.arange(1, N)
         J[M:2*M] = np.arange(0, N-1)
         L = sparse.coo_matrix((V, (I, J)), shape=(N, N)).tocsr()
-        L = sparse.dia_matrix((L.sum(1).flatten(), 0), L.shape) - L
+        W = np.array(L.sum(1)).flatten()
+        L = sparse.dia_matrix((W, 0), L.shape) - L
+        W[0] = W[0]*2.0
+        W[-1] = W[-1]*2.0
+        D = sparse.dia_matrix((1.0/W, 0), L.shape)
+        #L = D.dot(L)
+        #print L.todense()
         deltaCoords = L.dot(self.Y)
         coo = L.tocoo()
         coo = np.vstack((coo.row, coo.col, coo.data)).T
@@ -247,10 +254,13 @@ class LaplacianSound(object):
         
         #Step 3: Solve for new positions
         y = np.array(LE*igl.eigen.MatrixXd(np.array(deltaCoords[:, 0:dims], dtype=np.float64)))
-        y[anchorsIdx] += anchorWeights*anchors
-        y = igl.eigen.MatrixXd(y)
+        y[anchorsIdx] += anchorWeights*anchors      
+        y = igl.eigen.MatrixXd(y)       
         ret = solver.solve(y)
+        YOrig = np.array(self.Y)
         self.Y = np.array(ret)
+        plt.plot(self.Y[:, 0], self.Y[:, 1], '.')
+        plt.show()
         
         self.YBuf.delete()
         self.YBuf = vbo.VBO(np.array(self.Y, dtype=np.float32))
@@ -259,6 +269,15 @@ class LaplacianSound(object):
         #Step 4: Change mel spectrum
         #TODO: Change sound
         #Subtract away original 3 components and put these in their place
+        XNew = self.X - (YOrig.dot(self.PCs.T)).T
+        XNew += (self.Y.dot(self.PCs.T)).T
+        self.XAudio = self.invertNewMelSpectrum(XNew)
+        self.X = XNew
+        self.updateSpecgramTexture()
+        sio.wavfile.write("temp.wav", self.Fs, self.XAudio)
+        if os.path.exists("temp.ogg"):
+            os.remove("temp.ogg")
+        subprocess.call(["avconv", "-i", "temp.wav", "temp.ogg"])
         
     def invertNewMelSpectrum(self, XNew):
         #Step 1: Create a new STFT with a scaled envelope
@@ -275,4 +294,5 @@ class LaplacianSound(object):
         SNew[idxpass, :] = self.S[idxpass, :] #Passband (
         #Step 2: Perform Griffin Lim iterative phase retrieval
         y = librosa.core.istft(SNew, self.hopSize, self.winSize)
+        y = y/np.max(abs(y)) #Prevent clippling (TODO: something smarter?)
         return y

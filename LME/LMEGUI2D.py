@@ -52,7 +52,7 @@ def saveImage(canvas, filename):
 
 class MeshViewerCanvas(glcanvas.GLCanvas):
     def initCircle(self):
-        NPoints = 200
+        NPoints = 10
         t = np.linspace(0, 2*np.pi, int(NPoints*1.5))[0:NPoints]
         Y = np.zeros((len(t), 2))
         Y[:, 0] = 400 + 200*np.cos(t)
