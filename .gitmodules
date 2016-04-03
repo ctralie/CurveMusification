@@ -1,0 +1,3 @@
+[submodule "PCAEnvelope/nmflib"]
+	path = PCAEnvelope/nmflib
+	url = https://github.com/audiofilter/nmflib.git
